@@ -1,0 +1,19 @@
+[project]
+name = "mj-lab-gecko-project"
+version = "0.1.0"
+description = "RL training for a gecko robot with mjlab"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "mjlab>=1.6.0",
+]
+
+[project.entry-points."mjlab.tasks"]
+gecko = "mj_lab_gecko_project.tasks"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.12.24,<0.13.0"]
+build-backend = "uv_build"
