@@ -311,9 +311,29 @@ uv run tensorboard --logdir logs/rsl_rl
 uv run play Gecko-Locomotion-Flat \
   --checkpoint-file logs/rsl_rl/gecko_locomotion/<run>/model_1499.pt --num-envs 4
 
+# Drive the robot with the keyboard (latest checkpoint by default)
+uv run python scripts/teleop.py [path/to/model_*.pt]
+
 # Measure command tracking headlessly (achieved CoM velocity per command)
 uv run python scripts/evaluate_policy.py logs/rsl_rl/gecko_locomotion/<run>/model_1499.pt
 ```
+
+### Teleop keys
+
+Focus the viewer window, then:
+
+| Key | Effect |
+|---|---|
+| ↑ / ↓ | forward / backward (vx ± 0.05 m/s) |
+| ← / → | turn left / right (ωz ± 0.1 rad/s) |
+| PageUp / PageDown | step left / right (vy ± 0.05 m/s) |
+| Delete | stop (zero command) |
+| Enter / Space | reset robot / pause |
+| `-` / `=` | slow down / speed up the simulation |
+| R | toggle the command and actual-velocity arrows |
+
+The current command appears in the top-left corner. Commands are clamped to the training
+ranges, because the policy has never seen anything outside them.
 
 Each run writes to `logs/rsl_rl/gecko_locomotion/<date_time>/`:
 

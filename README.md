@@ -15,6 +15,7 @@ export GIT_PYTHON_REFRESH=quiet  # only needed if git is not installed
 uv run list-envs                                   # Gecko-Locomotion-Flat
 uv run train Gecko-Locomotion-Flat --env.scene.num-envs 4096
 uv run play  Gecko-Locomotion-Flat --checkpoint-file logs/rsl_rl/gecko_locomotion/<run>/model_1499.pt
+uv run python scripts/teleop.py                    # drive it with the keyboard
 uv run tensorboard --logdir logs/rsl_rl
 uv run python tests/spawn_gecko.py                 # robot standing on the floor
 uv run pytest tests

@@ -56,7 +56,9 @@ class GaitPhaseCommand(CommandTerm):
 
   def _update_command(self, env_ids: torch.Tensor | None) -> None:
     if env_ids is None:  # Per-step advance only; resets keep the sampled phase.
-      self.clock = wrap_to_pi(self.clock + self._dphase)
+      # In place: rebinding would make an inference tensor when stepped under
+      # torch.inference_mode(), and the next reset's in-place write would fail.
+      self.clock.copy_(wrap_to_pi(self.clock + self._dphase))
 
 
 @dataclass(kw_only=True)
