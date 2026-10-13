@@ -12,48 +12,35 @@ export GIT_PYTHON_REFRESH=quiet  # only needed if git is not installed
 ## Usage
 
 ```bash
-uv run list-envs                                   # Gecko-Locomotion-Flat
+uv run list-envs                                   # Gecko-Locomotion-Flat / -Rough
 uv run train Gecko-Locomotion-Flat --env.scene.num-envs 4096
-uv run play  Gecko-Locomotion-Flat --checkpoint-file logs/rsl_rl/gecko_locomotion/<run>/model_1499.pt
-uv run python scripts/teleop.py                    # drive it with the keyboard
+uv run play  Gecko-Locomotion-Flat
 uv run tensorboard --logdir logs/rsl_rl
-uv run python tests/spawn_gecko.py                 # robot standing on the floor
+uv run python scripts/view_robot.py                # inspect the robot model
+uv run python scripts/spawn_gecko.py                # inspect the robot model and testing on floor
 uv run pytest tests
-
-# After changing the USD, regenerate the MJCF:
-uv run --no-project --python 3.12 --with usd-core --with numpy python scripts/usd_to_mjcf.py \
-  src/mj_lab_gecko_project/robots/gecko/gecko-aug-2026.usd src/mj_lab_gecko_project/robots/gecko/xmls
 ```
 
 ## Layout
 
 ```
 src/mj_lab_gecko_project/
-├── robots/gecko/              # USD source, generated MJCF, EntityCfg (XM430 actuators)
+├── robots/gecko/              # MJCF + EntityCfg (actuators, init state, collisions)
 └── tasks/locomotion/
-    ├── locomotion_env_cfg.py  # flat-ground task (obs, actions, rewards, DR)
-    ├── mdp/                   # gait clock, filtered action, CoM velocity, rewards
-    └── config/gecko/          # gecko env cfg, PPO cfg, task registration
+    ├── locomotion_env_cfg.py  # robot-agnostic base env cfg
+    ├── mdp/                   # custom rewards/observations/terminations/curriculums
+    └── config/gecko/          # gecko env cfgs, PPO cfg, task registration
 ```
 
 Tasks are registered through the `mjlab.tasks` entry point in `pyproject.toml`,
 so mjlab's `train` / `play` / `list-envs` find them automatically. Re-run
 `uv sync` after changing entry points.
 
-## Task design
+**Note:** `robots/gecko/xmls/gecko.xml` is currently a copy of the Unitree Go1
+model as a placeholder. Replace it with the gecko model and update
+`gecko_constants.py` and `config/gecko/env_cfgs.py` (body/site/geom names).
 
-Full write-up: [docs/LOCOMOTION.md](docs/LOCOMOTION.md).
+## Docs
 
-`Gecko-Locomotion-Flat` follows the terrestrial part of Tian et al. 2026,
-*Learning Whole-Body Control for a Salamander Robot* (arXiv:2603.16683), on
-flat ground and without backlash modelling:
-
-- **Action**: residual joint offsets on the nominal pose (19 joints), 4 Hz
-  first-order low-pass, 50 Hz policy.
-- **Actor obs**: joint vel, joint offset, IMU angular velocity, projected
-  gravity, gait phase (sin/cos per foot), velocity command, last 3 actions.
-  No linear velocity. The critic also gets CoM velocity and foot heights.
-- **Rewards** (x dt): CoM linear velocity tracking (1.0), CoM yaw-rate tracking
-  (0.5), energy |q̇·τ| (-1e-3), phase-conditioned Bezier foot height (1.0), plus
-  joint-limit (-1.0) and action-rate (-0.01) regularizers not in the paper.
-- **DR**: pushes, foot friction, mass/COM, joint friction, motor gains, encoder bias.
+- [docs/LOCOMOTION.md](docs/LOCOMOTION.md): robot, actuators, task design, training, deployment
+- [docs/COMPARISON.md](docs/COMPARISON.md): MLP/Hebbian × PPO/OpenES comparison, with videos

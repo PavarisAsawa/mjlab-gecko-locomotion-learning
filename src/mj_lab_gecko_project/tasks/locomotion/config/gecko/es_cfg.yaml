@@ -1,0 +1,94 @@
+
+# Task name - parse from the task name in the CLI
+task_name: null # task name is set on train file
+name : test_slalom      # Name for logging
+# experiment name. defaults to name of training config
+experiment: ''
+# if set to positive integer, overrides the default number of environments
+num_envs: ''
+# seed - set to -1 to choose random seed
+seed: -1
+# set the maximum number of learning iterations to train for. overrides default per-environment setting
+max_iterations: ''
+
+## Device config
+physics_engine: 'physx'
+# whether to use cpu or gpu pipeline
+pipeline: 'gpu'
+# whether to use cpu or gpu physx
+sim_device: 'gpu'
+# used for gpu simulation only - device id for running sim and task if pipeline=gpu
+device_id: 0
+# device to run RL
+rl_device: 'cuda:0'
+# multi-GPU training
+multi_gpu: False
+
+
+# RLGames Arguments
+# test - if set, run policy in inference mode (requires setting checkpoint to load)
+test: False
+# used to set checkpoint path
+checkpoint: ''
+# evaluate checkpoint
+evaluation: False
+
+# disables rendering
+headless: False  # <----------------------------------
+# enables native livestream
+enable_livestream: False
+# timeout for MT script
+mt_timeout: 300
+
+wandb :
+  wandb_activate: False
+  wandb_group: ''
+  wandb_name: ''
+  wandb_entity: ''
+  wandb_project: 'GECKO'
+
+tensorboard :
+  tensorboard_activate: False
+  tensorboard_log_every: 50
+
+# path to a kit app file
+kit_app: ''
+
+# Warp
+warp: False
+
+# Training params
+EPOCHS: 500                   # <---------------------------------- 100
+SAVE_EVERY: 100               # <---------------------------------- 100
+EPISODE_LENGTH_TRAIN: 500     # <---------------------------------- 500
+EPISODE_LENGTH_TEST: 1000 #2100      # <---------------------------------- 500
+resume_train: False
+
+custom_rewards: False
+
+# ES algorithm Standard
+ES_params:
+  POPSIZE: 1024 # workstation (500) # Default Condition if not parse argument
+  rank_fitness: True
+  antithetic: True
+  learning_rate: 0.1 #0.015 #0.1 - bing # 0.05:RBF
+  learning_rate_decay:  0.9999 #0.98 # 0.999 - bing # 0.9999
+  sigma_init: 0.1 #0.02 # 0.1 -bing # 0.1 RBF
+  sigma_decay: 0.9999 # 0.999
+  learning_rate_limit: 0.001
+  sigma_limit: 0.0001
+
+# model 
+model: hebb # ff, hebb, lstm , cpg_rbf
+model_type: 'parallel_Hebb'
+FF_ARCHITECTURE: [112, 128, 64, 19] # was [64, 128, 64, 19]. Input/output sizes come from the env (112 obs, 19 actions); only the hidden sizes are used. # [22, 20, 10, 16] # [51, 20, 10, 16] # [num_input, num_hidd, num_output] dbAlpha 1 output
+HEBB_ARCHITECTURE: [112, 128, 64, 19] # was [64, 128, 64, 19]. Input/output sizes come from the env (112 obs, 19 actions); only the hidden sizes are used. #[84, 64, 32, 16] # [num_input, num_hidd, num_output] Slalom Test
+LSTM_ARCHITECTURE: [51, 20, 16] # [num_input, num_hidd, num_output] dbAlpha 1 output
+RBF_ARCHITECTURE: [20, 19] # [RBF neurons , num_output]
+HEBB_init_wnoise: 0.04 #0.02 #0.01
+HEBB_norm: 'var' # var, max, clip
+USE_TRAIN_HEBB: False
+USE_TRAIN_PARAM: False
+HEBB_std_init_param: 0.025
+
+collect_w_matrix: False

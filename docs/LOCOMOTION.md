@@ -423,3 +423,162 @@ Every 20 ms on the robot:
 
 The ONNX metadata `joint_names` lists all 27 joints, including the 8 passive feet. The policy
 itself only uses the 19 actuated joints, in the order of section 4.
+
+---
+
+## 8. Custom algorithms and networks
+
+Your own learning code goes in `src/mj_lab_gecko_project/rl/`, and you select it **by import
+path** in [`rl_cfg.py`](../src/mj_lab_gecko_project/tasks/locomotion/config/gecko/rl_cfg.py).
+rsl-rl imports any `"module.path:ClassName"`, so you never edit mjlab or rsl-rl.
+
+| You want to change | Write | Select it with |
+|---|---|---|
+| Network architecture | subclass `rsl_rl.models.MLPModel`, replace `self.mlp`. Real example: [`rl/hebbian_ppo.py`](../src/mj_lab_gecko_project/rl/hebbian_ppo.py) (`HebbianModel`, a recurrent model) | `actor=RslRlModelCfg(class_name="mj_lab_gecko_project.rl.hebbian_ppo:HebbianModel", ...)` (see `gecko_hebbian_ppo_runner_cfg` in `rl_cfg.py`) |
+| PPO details (losses, advantages, auxiliary tasks) | subclass `rsl_rl.algorithms.PPO` | `algorithm=RslRlPpoAlgorithmCfg(class_name="mj_lab_gecko_project.rl.<module>:<Class>", ...)` |
+| A gradient-free optimizer (ES) | its own training loop: [`scripts/train_es.py`](../scripts/train_es.py) with [`rl/evolution_strategies.py`](../src/mj_lab_gecko_project/rl/evolution_strategies.py) | see section 9 |
+| A different kind of algorithm (SAC, model-based, ...) | your own runner class with `__init__(env, train_cfg, log_dir, device)`, `learn(num_learning_iterations, init_at_random_ep_len)`, `save`, `load`, `get_inference_policy` | `runner_cls=` in `register_mjlab_task` (`config/gecko/__init__.py`) |
+| What the policy observes or is rewarded for | `tasks/locomotion/mdp/` and `locomotion_env_cfg.py` | not an RL change: edit the env |
+
+You can try a class without editing any file by overriding it on the command line:
+
+```bash
+uv run train Gecko-Locomotion-Flat --agent.actor.class-name mj_lab_gecko_project.rl.<module>:<Class>
+```
+
+**Rules that keep training, `play`, `teleop.py` and ONNX export working:**
+
+- **Constructor arguments:** a model's `__init__` gets `(obs, obs_groups, obs_set, output_dim)`
+  plus every `RslRlModelCfg` field as a keyword argument. An algorithm's `__init__` gets
+  `(actor, critic, storage)` plus every `algorithm` field except `class_name`.
+- **New hyperparameters:** subclass the config dataclass (`RslRlModelCfg` or
+  `RslRlPpoAlgorithmCfg`) and add fields, so they reach your class and are saved in
+  `params/agent.yaml`.
+- **Keep the output convention:** `self.mlp` maps the normalized observation to the
+  distribution's `input_dim`, like rsl-rl's `MLP`. Keep it ONNX-traceable, with no
+  data-dependent Python `if`s.
+- **Recurrent networks** (memory instead of the 3-action history): set
+  `class_name="RNNModel"` and `rnn_type="lstm"` or `"gru"` in `RslRlModelCfg`. No custom
+  code is needed.
+- **Checkpoints are tied to their classes:** a checkpoint only loads into the same classes.
+  `play`, `evaluate_policy.py` and `teleop.py` rebuild the model from the task's
+  `rl_cfg.py`, so commit the class names you trained with there.
+
+---
+
+## 9. Network × optimizer comparison
+
+Four ways of learning the same task, `Gecko-Locomotion-Flat`. All four share the
+environment, rewards, domain randomization and the 112-dim actor observation.
+
+| # | Network | Optimizer | Train command | Logs |
+|---|---|---|---|---|
+| 1 | MLP (512-256-128, ELU) | PPO | `uv run train Gecko-Locomotion-Flat --env.scene.num-envs 4096` | `logs/rsl_rl/gecko_locomotion/` |
+| 2 | MLP (128-64, tanh) | OpenES | `uv run python scripts/train_es.py --model ff` | `logs/es/gecko_locomotion_es_ff/` |
+| 3 | Hebbian (128-64) | OpenES | `uv run python scripts/train_es.py --model hebb` | `logs/es/gecko_locomotion_es_hebb/` |
+| 4 | Hebbian (128-64) | PPO | `uv run train Gecko-Locomotion-Flat-HebbPPO --env.scene.num-envs 1024` | `logs/rsl_rl/gecko_locomotion_hebb_ppo/` |
+
+**Compare them** (after training; run one GPU job at a time):
+
+```bash
+uv run python scripts/compare_policies.py      # latest checkpoint of each case
+# → logs/compare/<date>/results.md, results.json, curves.png
+```
+
+### How ES training works (cases 2 and 3)
+
+[`scripts/train_es.py`](../scripts/train_es.py) uses `OpenES` from
+`rl/evolution_strategies.py`; `CMAES` and `PEPG` are kept but not used. Settings come from
+[`es_cfg.yaml`](../src/mj_lab_gecko_project/tasks/locomotion/config/gecko/es_cfg.yaml):
+`ES_params`, `EPOCHS`, `EPISODE_LENGTH_TRAIN`, `SAVE_EVERY`, `model`, `*_ARCHITECTURE` and
+`HEBB_*`. CLI flags override them. The Isaac Gym fields in that file are ignored.
+
+Each generation:
+
+1. `ask()` returns `POPSIZE` parameter sets, and **env *i* runs member *i***, so the
+   population is evaluated in one batched GPU rollout.
+2. All envs reset. Antithetic pairs (members *i* and *i* + P/2) get the same velocity command
+   and gait phase, which reduces fitness noise.
+3. Rollout: `EPISODE_LENGTH_TRAIN` steps (500 = 10 s). **Fitness = the summed PPO task
+   reward.** A robot that falls stops collecting reward.
+4. `tell(fitness)`, using rank-based fitness from your config.
+
+**Observations** are normalized with running statistics shared by the population (as in
+Salimans et al. 2017), and saved in the checkpoint.
+
+**Actions** are the network's tanh output in [−1, 1], times the same action scale as PPO.
+
+**The Hebbian network** is your `HebbianNet`, wrapped by `PopulationHebbian` in
+[`rl/es_models.py`](../src/mj_lab_gecko_project/rl/es_models.py). ES evolves A, B, C, D and
+the learning rate per connection. The weights themselves are re-drawn from
+U(−`HEBB_init_wnoise`, +`HEBB_init_wnoise`) at every episode start and then change by the
+Hebbian rule. `mu` starts from `HebbianNet`'s N(0, `HEBB_std_init_param`) initialization;
+for the MLP it starts at 0.
+
+**Checkpoints** `es_<gen>.pt` hold `mu` (used for evaluation), the generation's best sample,
+the observation statistics and the small optimizer state.
+
+### How Hebbian + PPO works (case 4)
+
+[`rl/hebbian_ppo.py`](../src/mj_lab_gecko_project/rl/hebbian_ppo.py) is the same network and
+plasticity rule as `HebbianNet`, reusing its `var_norm`, `max_norm` and `clip_weights`. Two
+things differ:
+
+- **Trainable coefficients:** A, B, C, D and the learning rate are `nn.Parameter`s trained
+  by PPO's gradients, and all envs share one set.
+- **Plastic weights as recurrent state:** they are stored at every rollout step, re-drawn
+  when an episode ends, and PPO backpropagates through the Hebbian updates along each
+  trajectory, which is at most 20 steps long.
+
+Each step is gradient-checkpointed. Train with **1024 envs**: the stored weights take about
+2 GB, and the run peaks at about 4 GB of GPU memory. With 4096 envs it would not fit in 8 GB.
+6000 iterations × 1024 envs × 20 steps gives the same env-step budget as case 1.
+
+### Fairness and caveats
+
+- **Same environment and same evaluation.** `compare_policies.py` uses deterministic actions
+  (ES: `mu`) and the same seeds for all four cases. It evaluates 10 fixed commands in the
+  play env, plus 20 s episodes in the training distribution (random commands, pushes,
+  noise, DR).
+- **Different budgets.** Your ES config (500 generations × 1024 × 500 steps = 256 M steps)
+  uses about 2× the env steps of PPO (123 M). The learning curves are plotted against env
+  steps, so you can also read an equal-budget comparison off them.
+- **Network size differs on purpose.** Case 1 is the tuned PPO MLP (about 225k actor parameters);
+  the ES and Hebbian cases use your `es_cfg.yaml` sizes. The parameter count is in the
+  results table.
+- **Training curves are not directly comparable.** ES curves are population averages, so they
+  include the exploration noise σ. PPO curves come from the stochastic policy. Judge the final
+  policies by the evaluation table, and use the curves for learning speed.
+- **No ONNX export for the Hebbian models.** `teleop.py` and `play` only load case 1.
+
+### First results (2026-10-13): only MLP + PPO walks
+
+Full report with videos: [COMPARISON.md](COMPARISON.md).
+
+`logs/compare/2026-10-13_00-17-11/` (results.md, curves.png):
+
+| Case | Params | Env steps | Train time | Return/s | Lin. err (m/s) | Yaw err (rad/s) | Falls |
+|---|---|---|---|---|---|---|---|
+| 1 · MLP + PPO | 224,550 | 123 M | 0.4 h | **2.45** | **0.004** | **0.010** | 0 |
+| 2 · MLP + ES | 23,955 | 256 M | 0.9 h | 1.76 | 0.114 | 0.130 | 0 |
+| 3 · Hebbian + ES | 118,720 | 256 M | 1.7 h | 1.75 | 0.114 | 0.130 | 0 |
+| 4 · Hebbian + PPO | 118,739 | 123 M | 3.5 h | 1.82 | 0.114 | 0.131 | 0 |
+| reference: zero action (stand still) | – | – | – | 1.79 | 0.114 | 0.130 | 0 |
+
+**Cases 2–4 learned to stand still.** Their velocity is about 0 for every command, and their
+return equals that of a policy that does nothing. They plateau at about 1.8 reward/s within
+the first ~10 M steps and never leave it.
+
+**Why:** with this reward, standing still already earns 73% of the best return.
+- Velocity tracking uses a wide kernel exp(−err²/0.05): standing still against a 0.2 m/s
+  command still gets 0.45.
+- The foot-phase reward is 0.94 with all feet on the ground, because the swing reference is
+  only 3 cm high.
+
+So moving the legs first lowers the reward, and only an optimizer that explores hard (PPO's
+Gaussian noise with a large MLP) gets past that valley. The ES mean starts at, or near, the
+standing policy (the MLP starts at mu = 0, which is exactly zero action).
+
+**Hebbian-specific concern:** `var_norm` rescales every weight matrix to unit variance. With
+112 inputs, the pre-activations are about √112 ≈ 10, so the tanh units saturate. That makes
+the Hebbian network hard to train with either optimizer.
