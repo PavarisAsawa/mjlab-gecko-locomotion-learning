@@ -8,13 +8,14 @@ Usage:
   uv run python scripts/teleop.py                      # latest checkpoint in logs/
   uv run python scripts/teleop.py path/to/model_1499.pt
 
-Keys (focus the viewer window):
-  Up / Down          forward / backward   (vx +- 0.05 m/s)
-  Left / Right       turn left / right    (wz +- 0.1 rad/s)
-  PageUp / PageDown  step left / right    (vy +- 0.05 m/s)
-  Delete             stop (zero command)
+Keys (focus the viewer window; edit KEYMAP below to change them):
+  Up / Down                    forward / backward   (vx +- 0.05 m/s)
+  Left / Right                 turn left / right    (wz +- 0.1 rad/s)
+  + / -  (also PgUp/PgDn, Home/End)  step left / right  (vy +- 0.05 m/s)
+  Numpad 8/2, 4/6, 7/9         forward/back, step left/right, turn left/right
+  Delete, Numpad 5             stop (zero command)
   Enter              reset robot          Space   pause
-  - / =              slower / faster sim  R       toggle command arrows
+  [ / ]              slower / faster sim  R       toggle command arrows
 Commands are clamped to the training ranges.
 """
 
@@ -35,15 +36,7 @@ from mjlab.envs import ManagerBasedRlEnv  # noqa: E402
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper  # noqa: E402
 from mjlab.tasks.registry import load_rl_cfg  # noqa: E402
 from mjlab.viewer import NativeMujocoViewer  # noqa: E402
-from mjlab.viewer.native.keys import (  # noqa: E402
-  KEY_DELETE,
-  KEY_DOWN,
-  KEY_LEFT,
-  KEY_PAGE_DOWN,
-  KEY_PAGE_UP,
-  KEY_RIGHT,
-  KEY_UP,
-)
+from mjlab.viewer.native import keys as K  # noqa: E402
 
 from mj_lab_gecko_project.tasks.locomotion.config.gecko.env_cfgs import (  # noqa: E402
   gecko_flat_env_cfg,
@@ -52,6 +45,27 @@ from mj_lab_gecko_project.tasks.locomotion.config.gecko.env_cfgs import (  # noq
 TASK = "Gecko-Locomotion-Flat"
 LOG_ROOT = Path("logs/rsl_rl/gecko_locomotion")
 STEP = {"vx": 0.05, "vy": 0.05, "wz": 0.1}
+
+# Key -> (command, direction). Edit freely; several keys may map to one action.
+# Avoid letter keys: MuJoCo's viewer uses every letter as a display toggle (J = joints,
+# W = wireframe, ...), so they would also change the view. mjlab additionally uses
+# Enter, Space, ",", ".", P, R, A and Right (single step while paused). mjlab's
+# sim-speed keys - and = are taken over for vy here; sim speed moves to [ and ].
+KEYMAP: dict[int, tuple[str, int]] = {
+  # Arrows / PageUp-PageDown / Home-End.
+  K.KEY_UP: ("vx", +1), K.KEY_DOWN: ("vx", -1),
+  K.KEY_LEFT: ("wz", +1), K.KEY_RIGHT: ("wz", -1),
+  K.KEY_PAGE_UP: ("vy", +1), K.KEY_PAGE_DOWN: ("vy", -1),
+  K.KEY_HOME: ("vy", +1), K.KEY_END: ("vy", -1),
+  # + / - : step left / right. "+" is the "=" key (with or without Shift).
+  K.KEY_EQUAL: ("vy", +1), K.KEY_MINUS: ("vy", -1),
+  K.KEY_KP_ADD: ("vy", +1), K.KEY_KP_SUBTRACT: ("vy", -1),
+  # Numpad layout (Num Lock on): 8/2 forward/back, 4/6 left/right, 7/9 turn.
+  K.KEY_KP_8: ("vx", +1), K.KEY_KP_2: ("vx", -1),
+  K.KEY_KP_4: ("vy", +1), K.KEY_KP_6: ("vy", -1),
+  K.KEY_KP_7: ("wz", +1), K.KEY_KP_9: ("wz", -1),
+}
+STOP_KEYS = (K.KEY_DELETE, K.KEY_KP_5)
 
 
 class VelocityKeyboard:
@@ -63,16 +77,11 @@ class VelocityKeyboard:
     self._lock = threading.Lock()
 
   def __call__(self, key: int) -> None:
-    deltas = {
-      KEY_UP: ("vx", +1), KEY_DOWN: ("vx", -1),
-      KEY_LEFT: ("wz", +1), KEY_RIGHT: ("wz", -1),
-      KEY_PAGE_UP: ("vy", +1), KEY_PAGE_DOWN: ("vy", -1),
-    }
     with self._lock:
-      if key == KEY_DELETE:
+      if key in STOP_KEYS:
         self._cmd = dict.fromkeys(self._cmd, 0.0)
-      elif key in deltas:
-        name, sign = deltas[key]
+      elif key in KEYMAP:
+        name, sign = KEYMAP[key]
         lo, hi = self._limits[name]
         value = round(self._cmd[name] + sign * STEP[name], 3)
         self._cmd[name] = min(max(value, lo), hi)
@@ -105,13 +114,23 @@ class TeleopViewer(NativeMujocoViewer):
     super().__init__(*args, key_callback=keyboard, **kwargs)
     self._keyboard = keyboard
 
+  def _safe_key_callback(self, key: int) -> None:
+    if key in (K.KEY_MINUS, K.KEY_EQUAL):  # vy, not mjlab's sim-speed change.
+      self._keyboard(key)
+    elif key == K.KEY_LEFT_BRACKET:
+      self.request_speed_down()
+    elif key == K.KEY_RIGHT_BRACKET:
+      self.request_speed_up()
+    else:
+      super()._safe_key_callback(key)
+
   def _set_status_overlay(self, viewer: mujoco.viewer.Handle) -> None:
     vx, vy, wz = self._keyboard.get()
     status = self.get_status()
     viewer.set_texts((
       mujoco.mjtFontScale.mjFONTSCALE_150.value,
       mujoco.mjtGridPos.mjGRID_TOPLEFT.value,
-      "vx  (Up/Down)\nvy  (PgUp/PgDn)\nwz  (Left/Right)\n\nStatus\nActual RT",
+      "vx  (Up/Down)\nvy  (+/-)\nwz  (Left/Right)\n\nStatus\nActual RT",
       f"{vx:+.2f} m/s\n{vy:+.2f} m/s\n{wz:+.2f} rad/s\n\n"
       f"{'PAUSED' if status.paused else 'RUNNING'}\n{status.actual_realtime:.2f}x",
     ))

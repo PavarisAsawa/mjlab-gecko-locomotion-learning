@@ -326,13 +326,16 @@ Focus the viewer window, then:
 |---|---|
 | ↑ / ↓ | forward / backward (vx ± 0.05 m/s) |
 | ← / → | turn left / right (ωz ± 0.1 rad/s) |
-| PageUp / PageDown | step left / right (vy ± 0.05 m/s) |
+| `+` / `-` (also PageUp / PageDown, Home / End) | step left / right (vy ± 0.05 m/s) |
+| Numpad 8/2, 4/6, 7/9, 5 | forward/back, step left/right, turn left/right, stop (Num Lock on) |
 | Delete | stop (zero command) |
 | Enter / Space | reset robot / pause |
-| `-` / `=` | slow down / speed up the simulation |
+| `[` / `]` | slow down / speed up the simulation |
 | R | toggle the command and actual-velocity arrows |
 
-The current command appears in the top-left corner. Commands are clamped to the training
+The current command appears in the top-left corner. To change keys, edit `KEYMAP` at the
+top of `scripts/teleop.py`; avoid letter keys, because MuJoCo uses every letter as a display
+toggle. Commands are clamped to the training
 ranges, because the policy has never seen anything outside them.
 
 Each run writes to `logs/rsl_rl/gecko_locomotion/<date_time>/`:
